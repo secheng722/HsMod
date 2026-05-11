@@ -83,16 +83,33 @@ jobs:
         if: steps.check.outputs.has_updates == 'true'
         shell: pwsh
         run: |
-          $dllPath = "HsMod/Release/HsMod.dll"
-          if (-not (Test-Path $dllPath)) {
-            throw "Build output file not found: $dllPath"
+          $dll = Get-ChildItem -Path "HsMod" -Recurse -File -Filter "HsMod.dll" |
+            Where-Object { $_.FullName -match "[\\/]bin[\\/]Release[\\/]" } |
+            Select-Object -First 1
+
+          if (-not $dll) {
+            throw "Build output file not found under HsMod/**/bin/Release/**/HsMod.dll"
           }
-          Copy-Item -Path $dllPath -Destination "HsMod.dll" -Force
+
+          Write-Host "Using build artifact: $($dll.FullName)"
+          Copy-Item -Path $dll.FullName -Destination "HsMod.dll" -Force
 
       - name: Generate Tag
         if: steps.check.outputs.has_updates == 'true'
         id: tag
+        shell: pwsh
         run: echo "name=v$(Get-Date -Format 'yyyy.MM.dd-HHmm')" >> $env:GITHUB_OUTPUT
+
+      - name: Debug Release Inputs
+        if: steps.check.outputs.has_updates == 'true'
+        shell: pwsh
+        run: |
+          Write-Host "[DEBUG] Tag name: ${{ steps.tag.outputs.name }}"
+          Write-Host "[DEBUG] Target branch: ${{ env.BUILD_BRANCH }}"
+          if (-not (Test-Path "HsMod.dll")) {
+            throw "[ERROR] HsMod.dll not found in workspace root."
+          }
+          Get-Item "HsMod.dll" | Format-List FullName,Length,LastWriteTime
 
       - name: Create Release
         if: steps.check.outputs.has_updates == 'true'
@@ -104,13 +121,3 @@ jobs:
             HsMod.dll
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "[DEBUG] Starting release creation..."
-          echo "[DEBUG] Tag name: ${{ steps.tag.outputs.name }}"
-          echo "[DEBUG] Target branch: ${{ env.BUILD_BRANCH }}"
-          echo "[DEBUG] Checking if HsMod.dll exists..."
-          if [ ! -f HsMod.dll ]; then
-            echo "[ERROR] HsMod.dll not found in the expected location!"
-            exit 1
-          fi
-          echo "[DEBUG] HsMod.dll found. Proceeding with release creation."
