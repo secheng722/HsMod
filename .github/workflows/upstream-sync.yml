@@ -98,16 +98,27 @@ jobs:
         if: steps.check.outputs.should_release == 'true'
         shell: pwsh
         run: |
-          $dll = Get-ChildItem -Path "HsMod" -Recurse -File -Filter "HsMod.dll" |
-            Where-Object { $_.FullName -match "[\\/]bin[\\/]Release[\\/]" } |
+          $candidates = @(
+            "HsMod/Release/HsMod.dll",
+            "HsMod/bin/Release/HsMod.dll"
+          )
+
+          $dll = $candidates |
+            Where-Object { Test-Path $_ } |
             Select-Object -First 1
 
           if (-not $dll) {
-            throw "Build output file not found under HsMod/**/bin/Release/**/HsMod.dll"
+            $dll = Get-ChildItem -Path "HsMod" -Recurse -File -Filter "HsMod.dll" |
+              Where-Object { $_.FullName -match "[\\/]bin[\\/]Release[\\/]" } |
+              Select-Object -ExpandProperty FullName -First 1
           }
 
-          Write-Host "Using build artifact: $($dll.FullName)"
-          Copy-Item -Path $dll.FullName -Destination "HsMod.dll" -Force
+          if (-not $dll) {
+            throw "Build output file not found. Checked HsMod/Release/HsMod.dll and HsMod/**/bin/Release/**/HsMod.dll"
+          }
+
+          Write-Host "Using build artifact: $dll"
+          Copy-Item -Path $dll -Destination "HsMod.dll" -Force
 
       - name: Generate Tag
         if: steps.check.outputs.should_release == 'true'
