@@ -100,6 +100,17 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.name }}
           target_commitish: ${{ env.BUILD_BRANCH }}
-          files: HsMod.dll
+          files: |
+            HsMod.dll
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "[DEBUG] Starting release creation..."
+          echo "[DEBUG] Tag name: ${{ steps.tag.outputs.name }}"
+          echo "[DEBUG] Target branch: ${{ env.BUILD_BRANCH }}"
+          echo "[DEBUG] Checking if HsMod.dll exists..."
+          if [ ! -f HsMod.dll ]; then
+            echo "[ERROR] HsMod.dll not found in the expected location!"
+            exit 1
+          fi
+          echo "[DEBUG] HsMod.dll found. Proceeding with release creation."
