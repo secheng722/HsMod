@@ -1,0 +1,105 @@
+name: Upstream Sync
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM_REPO: https://github.com/Pik-4/HsMod.git
+  UPSTREAM_BRANCH: bepinex5
+  SYNC_BRANCH: upstream-bepinex5
+  BUILD_BRANCH: bepinex5
+
+on:
+  schedule:
+    - cron: "0 9 * * *" # Once per day at 09:00 UTC (17:00 CST)
+  workflow_dispatch: # Allow manual trigger
+
+concurrency:
+  group: upstream-sync-bepinex5
+  cancel-in-progress: false
+
+jobs:
+  sync_and_build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout build branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_BRANCH }}
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.x
+
+      - name: Configure Git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Sync upstream mirror branch
+        id: check
+        shell: pwsh
+        run: |
+          git remote remove upstream 2>$null
+          git remote add upstream $env:UPSTREAM_REPO
+          git fetch --prune upstream $env:UPSTREAM_BRANCH
+          git fetch --prune origin
+
+          # 1) Keep a dedicated mirror branch that always points at upstream head.
+          git checkout -B $env:SYNC_BRANCH upstream/$env:UPSTREAM_BRANCH
+          git push --force-with-lease origin $env:SYNC_BRANCH
+
+          # 2) Return to build branch and decide whether there is new upstream content to merge.
+          git checkout -B $env:BUILD_BRANCH origin/$env:BUILD_BRANCH
+
+          git merge-base --is-ancestor origin/$env:SYNC_BRANCH HEAD
+          if ($LASTEXITCODE -eq 0) {
+            "has_updates=false" >> $env:GITHUB_OUTPUT
+            "Build branch already contains latest upstream mirror commit."
+            exit 0
+          }
+
+          git merge --no-edit origin/$env:SYNC_BRANCH
+          if ($LASTEXITCODE -ne 0) {
+            git merge --abort
+            throw "Merge conflict detected while merging $env:SYNC_BRANCH into $env:BUILD_BRANCH. Resolve conflicts manually."
+          }
+
+          git push origin $env:BUILD_BRANCH
+          "has_updates=true" >> $env:GITHUB_OUTPUT
+          "Merged upstream mirror into build branch."
+
+      - name: Restore dependencies
+        if: steps.check.outputs.has_updates == 'true'
+        run: dotnet restore
+
+      - name: Build
+        if: steps.check.outputs.has_updates == 'true'
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Prepare Release Artifact
+        if: steps.check.outputs.has_updates == 'true'
+        shell: pwsh
+        run: |
+          $dllPath = "HsMod/Release/HsMod.dll"
+          if (-not (Test-Path $dllPath)) {
+            throw "Build output file not found: $dllPath"
+          }
+          Copy-Item -Path $dllPath -Destination "HsMod.dll" -Force
+
+      - name: Generate Tag
+        if: steps.check.outputs.has_updates == 'true'
+        id: tag
+        run: echo "name=v$(Get-Date -Format 'yyyy.MM.dd-HHmm')" >> $env:GITHUB_OUTPUT
+
+      - name: Create Release
+        if: steps.check.outputs.has_updates == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          target_commitish: ${{ env.BUILD_BRANCH }}
+          files: HsMod.dll
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
