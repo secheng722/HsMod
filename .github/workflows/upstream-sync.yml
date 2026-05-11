@@ -13,6 +13,12 @@ on:
   schedule:
     - cron: "0 9 * * *" # Once per day at 09:00 UTC (17:00 CST)
   workflow_dispatch: # Allow manual trigger
+    inputs:
+      force_release:
+        description: "Force build and release even when upstream has no new commits"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: upstream-sync-bepinex5
@@ -41,6 +47,8 @@ jobs:
       - name: Sync upstream mirror branch
         id: check
         shell: pwsh
+        env:
+          FORCE_RELEASE: ${{ github.event.inputs.force_release || 'false' }}
         run: |
           git remote remove upstream 2>$null
           git remote add upstream $env:UPSTREAM_REPO
@@ -57,6 +65,12 @@ jobs:
           git merge-base --is-ancestor origin/$env:SYNC_BRANCH HEAD
           if ($LASTEXITCODE -eq 0) {
             "has_updates=false" >> $env:GITHUB_OUTPUT
+            if ($env:FORCE_RELEASE -eq "true") {
+              "should_release=true" >> $env:GITHUB_OUTPUT
+              "No upstream updates, but force_release=true. Continuing to build and release."
+            } else {
+              "should_release=false" >> $env:GITHUB_OUTPUT
+            }
             "Build branch already contains latest upstream mirror commit."
             exit 0
           }
@@ -69,18 +83,19 @@ jobs:
 
           git push origin $env:BUILD_BRANCH
           "has_updates=true" >> $env:GITHUB_OUTPUT
+          "should_release=true" >> $env:GITHUB_OUTPUT
           "Merged upstream mirror into build branch."
 
       - name: Restore dependencies
-        if: steps.check.outputs.has_updates == 'true'
+        if: steps.check.outputs.should_release == 'true'
         run: dotnet restore
 
       - name: Build
-        if: steps.check.outputs.has_updates == 'true'
+        if: steps.check.outputs.should_release == 'true'
         run: dotnet build --configuration Release --no-restore
 
       - name: Prepare Release Artifact
-        if: steps.check.outputs.has_updates == 'true'
+        if: steps.check.outputs.should_release == 'true'
         shell: pwsh
         run: |
           $dll = Get-ChildItem -Path "HsMod" -Recurse -File -Filter "HsMod.dll" |
@@ -95,13 +110,13 @@ jobs:
           Copy-Item -Path $dll.FullName -Destination "HsMod.dll" -Force
 
       - name: Generate Tag
-        if: steps.check.outputs.has_updates == 'true'
+        if: steps.check.outputs.should_release == 'true'
         id: tag
         shell: pwsh
         run: echo "name=v$(Get-Date -Format 'yyyy.MM.dd-HHmm')" >> $env:GITHUB_OUTPUT
 
       - name: Debug Release Inputs
-        if: steps.check.outputs.has_updates == 'true'
+        if: steps.check.outputs.should_release == 'true'
         shell: pwsh
         run: |
           Write-Host "[DEBUG] Tag name: ${{ steps.tag.outputs.name }}"
@@ -112,7 +127,7 @@ jobs:
           Get-Item "HsMod.dll" | Format-List FullName,Length,LastWriteTime
 
       - name: Create Release
-        if: steps.check.outputs.has_updates == 'true'
+        if: steps.check.outputs.should_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.name }}
